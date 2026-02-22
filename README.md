@@ -1,6 +1,6 @@
 # ESP32 Avionics Command Console (Web BLE)
 
-This project provides a high-fidelity, single-page web interface for controlling an ESP32 "Master" board via the Web Bluetooth API (BLE). Designed with a SpaceX-inspired "Dark Mode" aesthetic, it allows for real-time arming and monitoring of multiple hardware nodes (Master + Sub-Boards).
+This project provides a high-fidelity, single-page web interface for controlling an ESP32 "Master" board via the Web Bluetooth API (BLE). It allows for real-time arming and monitoring of multiple hardware nodes (Master + Sub-Boards).
 
 ## Features
 
