@@ -1,0 +1,31 @@
+/* Minimal Offline Tailwind Build for Remote ARM */
+body { background-color: #020617; color: #f8fafc; font-family: ui-monospace, monospace; margin: 0; }
+.flex { display: flex; }
+.h-screen { height: 100vh; }
+.hidden { display: none; }
+.w-64 { width: 16rem; }
+.bg-slate-900 { background-color: #0f172a; }
+.bg-slate-950 { background-color: #020617; }
+.border-r { border-right-width: 1px; }
+.border-slate-800 { border-color: #1e293b; }
+.p-6 { padding: 1.5rem; }
+.p-10 { padding: 2.5rem; }
+.flex-1 { flex: 1 1 0%; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.text-5xl { font-size: 3rem; }
+.font-black { font-weight: 900; }
+.mb-10 { margin-bottom: 2.5rem; }
+.bg-blue-600 { background-color: #2563eb; }
+.text-white { color: #fff; }
+.px-12 { padding-left: 3rem; padding-right: 3rem; }
+.py-4 { padding-top: 1rem; padding-bottom: 1rem; }
+.rounded-lg { border-radius: 0.5rem; }
+.text-xl { font-size: 1.25rem; }
+.border-b-4 { border-bottom-width: 4px; }
+.border-blue-800 { border-color: #1e40af; }
+.grid { display: grid; }
+.gap-6 { gap: 1.5rem; }
+.grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+/* Add more as needed based on your UI classes */
