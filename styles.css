@@ -3,23 +3,55 @@
 }
 
 .status-indicator.disarmed {
-    background: #1e293b;
-    border: 2px solid #ef4444;
-    box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+    background: #10b981;
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
 }
 
 .status-indicator.armed {
-    background: #10b981;
-    box-shadow: 0 0 20px #10b981, 0 0 40px rgba(16, 185, 129, 0.4);
-    animation: alert-pulse 1s infinite alternate;
+    background: #ef4444;
+    box-shadow: 0 0 20px #ef4444, 0 0 40px rgba(239, 68, 68, 0.4);
+    animation: alert-pulse 0.6s infinite alternate;
 }
 
 @keyframes alert-pulse {
-    from { transform: scale(1); opacity: 1; }
-    to { transform: scale(1.2); opacity: 0.8; }
+    from { transform: scale(1); filter: brightness(1); }
+    to { transform: scale(1.1); filter: brightness(1.4); }
 }
 
-/* Custom Scrollbar for the avionics look */
+.btn-industrial {
+    position: relative;
+    transition: all 0.1s;
+    border-bottom-width: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 900;
+    opacity: 0.4;
+    filter: grayscale(0.8);
+}
+
+.btn-industrial:active {
+    border-bottom-width: 0;
+    transform: translateY(4px);
+}
+
+.btn-industrial.active {
+    opacity: 1;
+    filter: grayscale(0);
+    border-bottom-width: 4px;
+    box-shadow: 0 0 20px rgba(255,255,255,0.1);
+}
+
+.channel-card {
+    background: #0f172a;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    border: 1px solid #1e293b;
+}
+
+.channel-card:hover {
+    border-color: #334155;
+}
+
+/* Custom Scrollbar */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
