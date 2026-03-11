@@ -1,53 +1,103 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Remote ARM Console</title>
-    <link rel="stylesheet" href="tailwind-offline.css">
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0A0E0A" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Remote Arm" />
+  <meta name="description" content="RRPL Rocket BLE Ground Control Station" />
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+
+  <title>RRPL Remote Arm</title>
+  <link rel="stylesheet" href="styles.css" />
 </head>
-<body class="bg-slate-950 text-slate-100 font-mono">
-    <div class="flex h-screen overflow-hidden">
-        
-        <aside id="sidebar" class="w-64 bg-slate-900 border-r border-slate-800 p-6 hidden">
-            <h2 class="text-xs font-bold text-slate-500 mb-6 uppercase tracking-widest">Connected Nodes</h2>
-            <ul id="board-list" class="space-y-2">
-                </ul>
-        </aside>
+<body>
 
-        <main class="flex-1 p-10 overflow-y-auto">
-            
-            <div id="connection-screen" class="h-full flex flex-col items-center justify-center">
-                <h1 class="text-5xl font-black mb-10 tracking-tighter">Remote ARM</h1>
-                <div class="flex flex-col gap-4">
-                    <button id="connect-button" class="bg-blue-600 hover:bg-blue-500 text-white px-12 py-4 rounded-lg font-bold text-xl transition-all border-b-4 border-blue-800 active:border-b-0 active:translate-y-1 shadow-lg shadow-blue-900/40">
-                        ESTABLISH LINK
-                    </button>
-                    <button id="mock-button" class="text-slate-500 hover:text-slate-300 text-xs font-bold uppercase tracking-widest border border-slate-800 hover:border-slate-600 py-2 rounded transition-all">
-                        Run Simulation (No Hardware)
-                    </button>
-                </div>
-                <p class="mt-6 text-slate-500 text-sm">Ensure ESP32 is in pairing mode</p>
-            </div>
+  <!-- Atmospheric layers -->
+  <div class="grid-overlay" aria-hidden="true"></div>
+  <div class="scanlines" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
 
-            <div id="control-panel" class="hidden">
-                <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 border-b border-slate-800 pb-8 gap-4">
-                    <div>
-                        <span class="text-blue-500 text-[10px] font-black uppercase tracking-[0.3em]">Operational Node</span>
-                        <h1 id="board-title" class="text-4xl font-black tracking-tight flex items-center gap-4"></h1>
-                    </div>
-                    <button id="refresh-button" class="btn-industrial bg-slate-800 border-slate-900 hover:bg-slate-700 text-slate-300 px-6 py-2 rounded-lg text-xs transition-colors">
-                        Re-sync Network
-                    </button>
-                </header>
+  <div class="terminal-frame">
 
-                <div id="channel-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-                    </div>
-            </div>
-        </main>
-    </div>
+    <!-- ── HEADER ── -->
+    <header class="gs-header">
+      <div class="header-left">
+        <div class="logo-mark" aria-hidden="true">
+          <img src="rrpl_final_logo_white.png" alt="RRPL" width="36" height="36" />
+        </div>
+        <div class="header-title-block">
+          <h1 class="gs-title">RRPL REMOTE ARM</h1>
+          <p class="gs-subtitle">BLE CONTROL TERMINAL / v1.0</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="conn-badge" id="conn-badge">
+          <span class="conn-dot" id="conn-dot"></span>
+          <span class="conn-label" id="conn-label">DISCONNECTED</span>
+        </div>
+        <button class="btn-connect" id="btn-connect" aria-label="Connect to RRPL Rocket">
+          <span class="btn-connect-text">CONNECT</span>
+          <span class="btn-connect-icon" aria-hidden="true">&#x25B6;</span>
+        </button>
+      </div>
+    </header>
 
-    <script src="app.js"></script>
+    <!-- ── MAIN ── -->
+    <main class="gs-main">
+
+      <!-- Master Status Bar -->
+      <section class="master-status" id="master-status" aria-label="Master arm status" role="status" aria-live="assertive">
+        <div class="master-dots" id="master-dots" aria-hidden="true">
+          <!-- 6 dots injected by JS -->
+        </div>
+        <div class="master-text">
+          <span class="master-count" id="master-count">0/6</span>
+          <span class="master-label" id="master-label">CHANNELS ARMED</span>
+        </div>
+        <p class="master-caption" id="master-caption">SYSTEM SAFE &mdash; AWAITING CONNECTION</p>
+      </section>
+
+      <!-- Channel Grid -->
+      <section class="channels-section" aria-label="Channel controls">
+        <div class="channels-grid" id="channels-grid">
+          <!-- 6 channel cards injected by JS -->
+        </div>
+      </section>
+
+      <!-- Telemetry Console -->
+      <section class="console-section" aria-label="Telemetry log">
+        <div class="console-header-bar">
+          <span class="console-title">TELEMETRY LOG</span>
+          <button class="btn-clear" id="btn-clear" aria-label="Clear log">CLR</button>
+        </div>
+        <div class="console-body" id="console-log" role="log" aria-live="polite" aria-label="Telemetry messages">
+          <!-- entries injected by JS -->
+        </div>
+        <div class="console-footer" aria-hidden="true">
+          <span class="cursor-blink">&#x2588;</span>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- ── FOOTER ── -->
+    <footer class="gs-footer" aria-label="System information">
+      <span class="footer-item">SVC: 4FAFC201&hellip;</span>
+      <span class="footer-sep" aria-hidden="true">|</span>
+      <span class="footer-item">DEV: RRPL ROCKET</span>
+      <span class="footer-sep" aria-hidden="true">|</span>
+      <span class="footer-item" id="footer-time">--:--:-- UTC</span>
+    </footer>
+
+  </div><!-- /terminal-frame -->
+
+  <script src="app.js"></script>
 </body>
 </html>

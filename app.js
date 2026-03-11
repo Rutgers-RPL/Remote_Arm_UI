@@ -1,181 +1,301 @@
-document.addEventListener('DOMContentLoaded', () => {
-    // --- Configuration ---
-    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-    const CHAR_WRITE_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-    const CHAR_NOTIFY_UUID = "498c599b-ad01-4148-8a6a-73c332854747";
+/* ─────────────────────────────────────────────
+   RRPL Remote Arm — BLE Logic (6-channel)
+   ───────────────────────────────────────────── */
 
-    let bleDevice, bleServer, writeChar, notifyChar;
-    let bleBuffer = ""; // Buffers incoming data to handle packet fragmentation
+'use strict';
 
-    let state = {
-        boards: {}, // Stores: { 0: { name: 'Master', channels: { 1: 'disarmed', ... }, connected: true } }
-        selectedBoardId: 0
-    };
+// ── BLE Constants ─────────────────────────────
+const SERVICE_UUID     = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+const WRITE_CHAR_UUID  = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+const NOTIFY_CHAR_UUID = '498c599b-ad01-4148-8a6a-73c332854747';
+const DEVICE_NAME      = 'RRPL Rocket';
+const CHANNEL_COUNT    = 6;
 
-    // --- DOM Elements ---
-    const connectBtn = document.getElementById('connect-button');
-    const mockBtn = document.getElementById('mock-button');
-    const refreshBtn = document.getElementById('refresh-button');
-    const boardList = document.getElementById('board-list');
-    const channelGrid = document.getElementById('channel-grid');
-    const boardTitle = document.getElementById('board-title');
+// ── State ─────────────────────────────────────
+let bleDevice           = null;
+let writeCharacteristic = null;
+let isConnected         = false;
 
-    // --- Connection Logic ---
-    async function connect() {
-        try {
-            bleDevice = await navigator.bluetooth.requestDevice({
-                filters: [{ services: [SERVICE_UUID] }]
-            });
-            bleServer = await bleDevice.gatt.connect();
-            const service = await bleServer.getPrimaryService(SERVICE_UUID);
-            
-            writeChar = await service.getCharacteristic(CHAR_WRITE_UUID);
-            notifyChar = await service.getCharacteristic(CHAR_NOTIFY_UUID);
+// Per-channel armed state: index 0 = channel 1 … index 5 = channel 6
+const channelArmed = new Array(CHANNEL_COUNT).fill(false);
 
-            await notifyChar.startNotifications();
-            notifyChar.addEventListener('characteristicvaluechanged', handleNotify);
+// ── DOM (static) ──────────────────────────────
+const btnConnect    = document.getElementById('btn-connect');
+const btnClear      = document.getElementById('btn-clear');
+const connBadge     = document.getElementById('conn-badge');
+const connLabel     = document.getElementById('conn-label');
+const masterStatus  = document.getElementById('master-status');
+const masterCount   = document.getElementById('master-count');
+const masterCaption = document.getElementById('master-caption');
+const masterDots    = document.getElementById('master-dots');
+const channelsGrid  = document.getElementById('channels-grid');
+const consoleLog    = document.getElementById('console-log');
+const footerTime    = document.getElementById('footer-time');
 
-            // Initial Sync
-            sendData("SYNC_BOARDS");
-            enterApp();
-        } catch (e) { console.error("Connection Failed", e); }
+// ── Build Channel Cards ───────────────────────
+// DOM refs for each channel, keyed by channel number (1-based)
+const chRefs = {}; // { 1: { card, dot, stateLabel, btnArm, btnDisarm }, … }
+
+for (let ch = 1; ch <= CHANNEL_COUNT; ch++) {
+  // Master dot
+  const dot = document.createElement('div');
+  dot.className = 'master-dot';
+  masterDots.appendChild(dot);
+
+  // Channel card
+  const card = document.createElement('div');
+  card.className = 'channel-card';
+  card.dataset.ch = ch;
+  card.innerHTML = `
+    <div class="channel-header">
+      <span class="channel-id">CH 0${ch}</span>
+      <span class="channel-status-dot" data-ch-dot="${ch}"></span>
+    </div>
+    <span class="channel-state-label" data-ch-label="${ch}">DISARMED</span>
+    <div class="channel-actions">
+      <button class="btn-ch btn-ch-arm"    data-ch-arm="${ch}"    disabled>ARM</button>
+      <button class="btn-ch btn-ch-disarm" data-ch-disarm="${ch}" disabled>DISARM</button>
+    </div>
+  `;
+  channelsGrid.appendChild(card);
+
+  chRefs[ch] = {
+    card,
+    masterDot:  dot,
+    dot:        card.querySelector(`[data-ch-dot="${ch}"]`),
+    stateLabel: card.querySelector(`[data-ch-label="${ch}"]`),
+    btnArm:     card.querySelector(`[data-ch-arm="${ch}"]`),
+    btnDisarm:  card.querySelector(`[data-ch-disarm="${ch}"]`),
+  };
+
+  // Button listeners
+  chRefs[ch].btnArm.addEventListener('click',    () => sendCommand(`B0_${ch}_ARM`));
+  chRefs[ch].btnDisarm.addEventListener('click', () => sendCommand(`B0_${ch}_DISARM`));
+}
+
+// ── Service Worker ────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(() => log('Service worker registered', 'system'))
+      .catch(err => log(`Service worker failed: ${err.message}`, 'error'));
+  });
+}
+
+// ── UTC Clock ─────────────────────────────────
+function updateClock() {
+  const n = new Date();
+  footerTime.textContent =
+    `${pad(n.getUTCHours())}:${pad(n.getUTCMinutes())}:${pad(n.getUTCSeconds())} UTC`;
+}
+function pad(n) { return String(n).padStart(2, '0'); }
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── Console Logger ────────────────────────────
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function log(message, type = 'system') {
+  const n  = new Date();
+  const ts = `${pad(n.getUTCHours())}:${pad(n.getUTCMinutes())}:${pad(n.getUTCSeconds())}`;
+  const ms = String(n.getUTCMilliseconds()).padStart(3, '0');
+
+  const entry = document.createElement('div');
+  entry.className = `log-entry log-${type}`;
+  entry.innerHTML =
+    `<span class="log-time">[${ts}.${ms}]</span>` +
+    `<span class="log-msg">${escapeHtml(message)}</span>`;
+
+  consoleLog.appendChild(entry);
+  consoleLog.scrollTop = consoleLog.scrollHeight;
+}
+
+// ── BLE: Connect ──────────────────────────────
+async function connectBLE() {
+  if (!navigator.bluetooth) {
+    log('Web Bluetooth API not available. Use Chrome or Edge.', 'error');
+    return;
+  }
+  try {
+    log('Requesting BLE device…', 'system');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters:          [{ name: DEVICE_NAME }],
+      optionalServices: [SERVICE_UUID],
+    });
+
+    log(`Device found: "${bleDevice.name}"`, 'system');
+    bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+    const server  = await bleDevice.gatt.connect();
+    log('GATT server connected', 'system');
+
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    writeCharacteristic = await service.getCharacteristic(WRITE_CHAR_UUID);
+
+    const notifyChar = await service.getCharacteristic(NOTIFY_CHAR_UUID);
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener('characteristicvaluechanged', onNotification);
+
+    log('Notifications active. Ready.', 'system');
+    setConnected(true);
+
+  } catch (err) {
+    const msg = err.name === 'NotFoundError'
+      ? 'Device selection cancelled or not found.'
+      : `Connection error: ${err.message}`;
+    log(msg, err.name === 'NotFoundError' ? 'system' : 'error');
+    setConnected(false);
+  }
+}
+
+function onDisconnected() {
+  log('Device disconnected.', 'error');
+  writeCharacteristic = null;
+  setConnected(false);
+  // Reset all channels to disarmed
+  for (let ch = 1; ch <= CHANNEL_COUNT; ch++) setChannelArmed(ch, false, false);
+  updateMasterStatus();
+}
+
+// ── BLE: Send ─────────────────────────────────
+async function sendCommand(cmd) {
+  if (!writeCharacteristic) {
+    log('Cannot send — not connected.', 'error');
+    return;
+  }
+  try {
+    await writeCharacteristic.writeValue(new TextEncoder().encode(cmd));
+    log(`TX → ${cmd}`, 'tx');
+  } catch (err) {
+    log(`TX failed: ${err.message}`, 'error');
+  }
+}
+
+// ── BLE: Receive ──────────────────────────────
+// Expected notification format: B0_<N>_ARMED or B0_<N>_DISARMED
+// Also handles plain ARMED / DISARMED (applies to all channels)
+function onNotification(event) {
+  const raw   = new TextDecoder('utf-8').decode(event.target.value).trim();
+  const upper = raw.toUpperCase();
+
+  // Try to parse channel-specific message: anything with _<digit>_
+  const channelMatch = upper.match(/_(\d+)_(ARMED|DISARMED)/);
+
+  if (channelMatch) {
+    const ch    = parseInt(channelMatch[1], 10);
+    const armed = channelMatch[2] === 'ARMED';
+    const type  = armed ? 'armed' : 'rx';
+    log(`RX ← ${raw}`, type);
+    if (ch >= 1 && ch <= CHANNEL_COUNT) {
+      setChannelArmed(ch, armed, true);
+      updateMasterStatus();
+    } else {
+      log(`Unknown channel ${ch} in notification`, 'error');
     }
+  } else if (upper.includes('DISARMED')) {
+    // Generic DISARMED — apply to all channels
+    log(`RX ← ${raw}  (applying to all channels)`, 'rx');
+    for (let ch = 1; ch <= CHANNEL_COUNT; ch++) setChannelArmed(ch, false, true);
+    updateMasterStatus();
+  } else if (upper.includes('ARMED')) {
+    // Generic ARMED — apply to all channels
+    log(`RX ← ${raw}  (applying to all channels)`, 'armed');
+    for (let ch = 1; ch <= CHANNEL_COUNT; ch++) setChannelArmed(ch, true, true);
+    updateMasterStatus();
+  } else {
+    log(`RX ← ${raw}`, 'rx');
+  }
+}
 
-    function enterApp() {
-        document.getElementById('connection-screen').classList.add('hidden');
-        document.getElementById('sidebar').classList.remove('hidden');
-        document.getElementById('control-panel').classList.remove('hidden');
-    }
+// ── UI: Per-Channel State ─────────────────────
+function setChannelArmed(ch, armed, flash = false) {
+  channelArmed[ch - 1] = armed;
+  const refs = chRefs[ch];
+  if (!refs) return;
 
-    // --- Simulation Logic ---
-    function startSimulation() {
-        console.log("SIMULATION MODE ACTIVE");
-        console.log("Use window.simulateMsg('MESSAGE') to test events.");
-        console.log("Example: window.simulateMsg('B1_DISCONNECTED')");
-        
-        enterApp();
-        processMessage("BOARDS:2"); // Booster, Ignition, Nose Cone
-    }
+  if (armed) {
+    refs.card.classList.add('armed');
+    refs.dot.classList.add('armed');        // card dot - already handled by .channel-card.armed CSS
+    refs.stateLabel.textContent = 'ARMED';
+    refs.masterDot.classList.add('armed');
+  } else {
+    refs.card.classList.remove('armed');
+    refs.dot.classList.remove('armed');
+    refs.stateLabel.textContent = 'DISARMED';
+    refs.masterDot.classList.remove('armed');
+  }
 
-    window.simulateMsg = (msg) => processMessage(msg);
+  if (flash) {
+    refs.card.classList.remove('flash');
+    void refs.card.offsetWidth; // reflow
+    refs.card.classList.add('flash');
+  }
+}
 
-    // --- Data Processing ---
-    function handleNotify(event) {
-        const decoder = new TextDecoder();
-        bleBuffer += decoder.decode(event.target.value);
+// ── UI: Master Status ─────────────────────────
+function updateMasterStatus() {
+  const armedCount = channelArmed.filter(Boolean).length;
+  masterCount.textContent = `${armedCount}/${CHANNEL_COUNT}`;
 
-        if (bleBuffer.includes('\n')) {
-            const lines = bleBuffer.split('\n');
-            bleBuffer = lines.pop(); // Keep incomplete fragment
-            lines.forEach(line => processMessage(line.trim()));
-        }
-    }
+  if (armedCount > 0) {
+    masterStatus.classList.add('any-armed');
+    masterCaption.textContent = `\u26A0 ${armedCount} CHANNEL${armedCount > 1 ? 'S' : ''} ARMED \u2014 FIRE CIRCUIT ENABLED`;
+  } else {
+    masterStatus.classList.remove('any-armed');
+    masterCaption.textContent = isConnected
+      ? 'SYSTEM SAFE \u2014 ALL CHANNELS DISARMED'
+      : 'SYSTEM SAFE \u2014 AWAITING CONNECTION';
+  }
+}
 
-    function processMessage(msg) {
-        if (msg.startsWith("BOARDS:")) {
-            const count = parseInt(msg.split(":")[1]);
-            initBoards(count);
-        } else if (msg.endsWith("_DISCONNECTED")) {
-            const bId = parseInt(msg.substring(1, msg.indexOf('_')));
-            if (state.boards[bId]) {
-                state.boards[bId].connected = false;
-                render();
-            }
-        } else if (msg.includes("_ARMED") || msg.includes("_DISARMED")) {
-            const parts = msg.split("_"); // B0, CH1, ARMED
-            const bId = parseInt(parts[0].substring(1));
-            const cId = parseInt(parts[1].substring(2));
-            const status = parts[2].toLowerCase();
-            if(state.boards[bId]) {
-                state.boards[bId].channels[cId] = status;
-                render();
-            }
-        }
-    }
+// ── UI: Connected / Disconnected ─────────────
+function setConnected(connected) {
+  isConnected = connected;
 
-    function initBoards(count) {
-        const boardNames = {
-            0: "Booster Bay",
-            1: "Ignition Bay",
-            2: "Nose Cone"
-        };
+  connBadge.classList.toggle('connected', connected);
+  connLabel.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
+  btnConnect.classList.toggle('connected', connected);
+  btnConnect.querySelector('.btn-connect-text').textContent =
+    connected ? 'DISCONNECT' : 'CONNECT';
 
-        state.boards = {};
-        for (let i = 0; i <= count; i++) {
-            state.boards[i] = { 
-                id: i, 
-                name: boardNames[i] || `Aux Board ${i}`, 
-                channels: {},
-                connected: true
-            };
-            for (let j = 1; j <= 6; j++) state.boards[i].channels[j] = 'disarmed';
-        }
-        render();
-    }
+  for (let ch = 1; ch <= CHANNEL_COUNT; ch++) {
+    chRefs[ch].btnArm.disabled    = !connected;
+    chRefs[ch].btnDisarm.disabled = !connected;
+  }
 
-    // --- UI Rendering ---
-    function render() {
-        if (Object.keys(state.boards).length === 0) return;
-        
-        const board = state.boards[state.selectedBoardId];
-        const isDisconnected = !board.connected;
-        const isBoardArmed = Object.values(board.channels).some(s => s === 'armed');
-        
-        boardTitle.innerHTML = `
-            <div class="w-4 h-4 rounded-full shadow-lg transition-colors duration-500 ${isBoardArmed ? 'bg-green-500 shadow-green-900/40' : 'bg-red-600 shadow-red-900/40'}"></div>
-            ${board.name}
-            ${isDisconnected ? '<span class="ml-4 text-[10px] bg-red-600/20 text-red-500 border border-red-500/50 px-3 py-1 rounded-full uppercase tracking-tighter">Link Severed</span>' : ''}
-        `;
-        
-        // Render Sidebar
-        boardList.innerHTML = Object.values(state.boards).map(b => `
-            <li onclick="window.selectBoard(${b.id})" class="p-4 mb-3 rounded-lg cursor-pointer transition-all border border-transparent ${b.id === state.selectedBoardId ? 'bg-blue-600 border-blue-400 shadow-lg shadow-blue-900/40' : 'bg-slate-800 hover:bg-slate-700'} ${!b.connected ? 'opacity-40 grayscale' : ''}">
-                <div class="flex justify-between items-center">
-                    <span class="font-black text-xs uppercase tracking-widest">${b.name}</span>
-                    ${!b.connected ? '<span class="text-[8px] font-black text-red-500">OFFLINE</span>' : '<span class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_10px_#22c55e]"></span>'}
-                </div>
-            </li>
-        `).join('');
+  if (!connected) {
+    bleDevice = null;
+    updateMasterStatus();
+  } else {
+    masterCaption.textContent = 'SYSTEM SAFE \u2014 ALL CHANNELS DISARMED';
+  }
+}
 
-        // Render Channels
-        channelGrid.innerHTML = Object.entries(board.channels).map(([id, status]) => `
-            <div class="channel-card p-10 rounded-3xl border-2 border-slate-800 flex flex-col items-center relative overflow-hidden group transition-all hover:translate-y-[-2px]">
-                ${isDisconnected ? '<div class="absolute inset-0 bg-slate-950/70 z-20 flex items-center justify-center backdrop-blur-md"><span class="text-red-500 font-black text-xs tracking-[0.5em] rotate-[-15deg] border-4 border-red-500 px-4 py-2">MALFUNCTION</span></div>' : ''}
-                
-                <div class="absolute top-6 left-6 text-[9px] text-slate-500 font-black uppercase tracking-widest opacity-50">Relay 0${id}</div>
-                <div class="absolute top-6 right-6 text-[9px] ${status === 'armed' ? 'text-red-500' : 'text-green-500'} font-black uppercase tracking-widest">${status}</div>
-
-                <div class="status-indicator w-20 h-1.5 rounded-full mb-12 ${status}"></div>
-                
-                <h3 class="text-slate-400 text-[11px] font-black uppercase tracking-[0.5em] mb-12">System Control</h3>
-
-                <div class="flex gap-6 w-full px-2">
-                    <button onclick="sendAction(${id}, 'ARM')" ${isDisconnected ? 'disabled' : ''} 
-                        class="btn-industrial flex-1 bg-red-600 border-red-900 hover:bg-red-500 disabled:bg-slate-800 disabled:border-slate-900 disabled:text-slate-600 py-5 rounded-2xl text-[11px] ${status === 'armed' ? 'active' : ''}">
-                        ARM
-                    </button>
-                    <button onclick="sendAction(${id}, 'DISARM')" ${isDisconnected ? 'disabled' : ''} 
-                        class="btn-industrial flex-1 bg-emerald-600 border-emerald-900 hover:bg-emerald-500 disabled:bg-slate-800 disabled:border-slate-900 disabled:text-slate-600 py-5 rounded-2xl text-[11px] ${status === 'disarmed' ? 'active' : ''}">
-                        DISARM
-                    </button>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    window.selectBoard = (id) => { state.selectedBoardId = id; render(); };
-    
-    window.sendAction = (ch, action) => {
-        sendData(`B${state.selectedBoardId}_CH${ch}_${action}`);
-    };
-
-    async function sendData(str) {
-        console.log("OUTGOING:", str);
-        if (!writeChar) return;
-        await writeChar.writeValue(new TextEncoder().encode(str + "\n"));
-    }
-
-    connectBtn.addEventListener('click', connect);
-    mockBtn.addEventListener('click', startSimulation);
-    refreshBtn.addEventListener('click', () => sendData("SYNC_ALL"));
+// ── Connect button ────────────────────────────
+btnConnect.addEventListener('click', () => {
+  if (isConnected && bleDevice?.gatt.connected) {
+    log('Disconnecting…', 'system');
+    bleDevice.gatt.disconnect();
+  } else {
+    connectBLE();
+  }
 });
+
+// ── Clear log ─────────────────────────────────
+btnClear.addEventListener('click', () => {
+  consoleLog.innerHTML = '';
+  log('Log cleared.', 'system');
+});
+
+// ── Init ──────────────────────────────────────
+updateMasterStatus();
+log('RRPL Remote Arm initialized.', 'system');
+log('Press CONNECT to pair with rocket.', 'system');
+
+if (!navigator.bluetooth) {
+  log('WARNING: Web Bluetooth not supported. Use Chrome or Edge.', 'error');
+}

@@ -1,64 +1,76 @@
-# ESP32 Avionics Command Console (Web BLE)
+# RRPL Remote Arm
 
-This project provides a high-fidelity, single-page web interface for controlling an ESP32 "Master" board via the Web Bluetooth API (BLE). It allows for real-time arming and monitoring of multiple hardware nodes (Master + Sub-Boards).
+A single-page Progressive Web App (PWA) for controlling an RRPL Rocket ESP32 board via Web Bluetooth (BLE). Provides real-time arming and monitoring of 6 independent pyrotechnic channels from any Chromium-based browser.
 
 ## Features
 
-* **Secure Web Bluetooth Link:** Seamlessly connects to ESP32 hardware using the GATT protocol.
-* **Dynamic Node Discovery:** Automatically generates UI controls based on the number of sub-boards reported by the Master.
-* **Multi-Board Architecture:** Sidebar navigation allows switching between the "Master Unit" and various "Auxiliary Boards."
-* **Avionics Control Grid:** 6 channels per board with high-visibility "ARM" and "SAFE" (Disarm) controls.
-* **Real-Time Feedback Loop:** Visual status indicators (Red/Glowing Green) only update upon hardware confirmation, ensuring safety and accuracy.
-* **Robust Data Handling:** Implements packet buffering to prevent command corruption during BLE transmission.
-* **Responsive Ground Station UI:** Built with Tailwind CSS for a professional, mission-control feel.
+- **Web Bluetooth (BLE):** Connects directly to the ESP32 using the GATT protocol — no drivers, no server.
+- **6-Channel Control:** Individual ARM / DISARM buttons for each of the 6 channels, displayed in a 2×3 card grid.
+- **Hardware-Confirmed Status:** Channel indicators only turn green after the ESP32 sends a confirmation notification. No optimistic UI.
+- **Master Status Bar:** Live `X/6 CHANNELS ARMED` counter with per-channel dot indicators at a glance.
+- **Telemetry Console:** Timestamped log of every TX command and RX notification with color-coded entries.
+- **PWA / Offline Support:** A service worker caches all assets on first load so the app can be installed and used without an internet connection.
 
 ## Technology Stack
 
-* **Frontend:** HTML5, Tailwind CSS
-* **Logic:** JavaScript (ES6+) with Web Bluetooth API
-* **Firmware Compatibility:** ESP32 (Arduino/NimBLE-BLE)
+- **Frontend:** HTML5, CSS3 (custom, no framework)
+- **Logic:** Vanilla JavaScript (ES6+), Web Bluetooth API
+- **Offline:** Service Worker (Cache-First strategy)
+- **Firmware Target:** ESP32 (Arduino / NimBLE)
 
 ## How to Run
 
-### 1. Prerequisites
-* **Browser:** Google Chrome, Microsoft Edge, or Bluefy (iOS).
-* **Security:** Web Bluetooth **REQUIRES** a secure context. You must host this via `https://` or `localhost`. 
-* **Hosting:** If using VS Code, use the **Live Server** extension. Simply opening the file (`file://...`) will **not** work.
+### Prerequisites
+- **Browser:** Google Chrome or Microsoft Edge (desktop or Android). Safari and Firefox do not support Web Bluetooth.
+- **Secure Context:** Web Bluetooth requires `https://` or `localhost`. Opening `file://` directly will **not** work.
+- **Local hosting:** Use the VS Code **Live Server** extension, or any static file server (e.g. `npx serve .`).
 
-### 2. Hardware Setup
-Flash your ESP32 with the provided firmware. The UI is configured to look for these specific UUIDs:
-* **Service UUID:** `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
-* **Write Char UUID:** `beb5483e-36e1-4688-b7f5-ea07361b26a8`
-* **Notify Char UUID:** `498c599b-ad01-4148-8a6a-73c332854747`
+### Hardware Setup
 
-## Workflow & Usage
+Flash your ESP32 with firmware that exposes the following BLE profile:
 
-1.  **Establish Connection:** Click **ESTABLISH CONNECTION** and select your ESP32 (default name: "Ganesha-Master").
-2.  **Syncing:** Upon connection, the UI automatically sends `SYNC_BOARDS`. The sidebar will populate based on the hardware response.
-3.  **Commanding:** * Select a board from the sidebar.
-    * Click **ARM** to activate a channel. The indicator will pulse green once the ESP32 confirms the state.
-    * Click **SAFE** to disarm.
-4.  **Re-Sync:** Use the **RE-SYNC ALL** button to force a status update of every channel across all connected nodes.
+| | UUID |
+|---|---|
+| **Service** | `4fafc201-1fb5-459e-8fcc-c5c9c331914b` |
+| **Write Characteristic** | `beb5483e-36e1-4688-b7f5-ea07361b26a8` |
+| **Notify Characteristic** | `498c599b-ad01-4148-8a6a-73c332854747` |
+| **Device Name** | `RRPL Rocket` |
+
+## Usage
+
+1. **Connect:** Click **CONNECT** and select `RRPL Rocket` from the browser's device picker.
+   - The connection badge turns cyan, all 12 channel buttons become active.
+2. **Arm a channel:** Click **ARM** on the desired channel card. The UI sends the command and waits for hardware confirmation.
+3. **Disarm a channel:** Click **DISARM** on the desired channel card.
+4. **Disconnect:** Click **DISCONNECT** (same button). All channels reset to disarmed in the UI.
 
 ## Communication Protocol
 
-The UI and ESP32 communicate using a newline-terminated (`\n`) string protocol to ensure data integrity.
+### Commands (UI → ESP32)
 
-| Command (UI -> ESP) | Description |
-| :--- | :--- |
-| `SYNC_BOARDS` | Requests total count of auxiliary boards. |
-| `SYNC_ALL` | Requests status of every channel on every board. |
-| `B[ID]_CH[N]_ARM` | Request to ARM Board ID, Channel N. |
-| `B[ID]_CH[N]_DISARM` | Request to SAFE Board ID, Channel N. |
+| Command | Action |
+|---|---|
+| `B0_<N>_ARM` | Request ARM on channel N (1–6) |
+| `B0_<N>_DISARM` | Request DISARM on channel N (1–6) |
 
-| Notification (ESP -> UI) | Description |
-| :--- | :--- |
-| `BOARDS:[X]` | Tells UI to render X auxiliary boards. |
-| `B[ID]_CH[N]_ARMED` | Confirms Channel N on Board ID is now ARMED. |
-| `B[ID]_CH[N]_DISARMED` | Confirms Channel N on Board ID is now SAFED. |
+### Notifications (ESP32 → UI)
+
+| Notification | UI Response |
+|---|---|
+| `B0_<N>_ARMED` | Channel N card turns green, master counter increments |
+| `B0_<N>_DISARMED` | Channel N card turns red, master counter decrements |
+| `ARMED` *(generic)* | All 6 channels set to armed |
+| `DISARMED` *(generic)* | All 6 channels set to disarmed |
+
+## PWA Installation
+
+On the first visit (with an internet connection), the service worker caches all app assets. After that the app works fully offline and can be added to the home screen via the browser's "Install app" prompt.
+
+> **Note:** `manifest.json` references `icon-192.png` and `icon-512.png`. Drop two PNG icons of those sizes into the project root for the install prompt to include an app icon.
 
 ## Safety Note
-This software is designed for telemetry and control. When used for high-power applications (e.g., rocket pyrotechnics), ensure your ESP32 firmware includes physical safety interlocks and failsafes. The UI provides "Optimistic UI" prevention—meaning it will only show a "Green" status once the hardware has confirmed the state change.
+
+This software is a control interface only. For high-power pyrotechnic applications, ensure the ESP32 firmware implements physical safety interlocks and hardware failsafes independent of this UI. Status indicators update only on hardware confirmation — the UI will never show a channel as armed unless the ESP32 has explicitly confirmed it.
 
 ---
-*Developed for Rocket Propulsion Lab Avionics Systems.*
+*Developed for RRPL Avionics Systems.*
