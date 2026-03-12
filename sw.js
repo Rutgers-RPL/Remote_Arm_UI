@@ -4,7 +4,7 @@
 
 'use strict';
 
-const CACHE_NAME = 'rrpl-remote-arm-v1';
+const CACHE_NAME = 'rrpl-remote-arm-v2';
 
 // All local assets to pre-cache on install
 const LOCAL_ASSETS = [
